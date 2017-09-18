@@ -20,25 +20,26 @@
 
 package org.fedorahosted.freeotp;
 
-import java.nio.ByteBuffer;
-import java.security.InvalidKeyException;
-import java.security.NoSuchAlgorithmException;
-import java.util.Locale;
-
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-
 import android.net.Uri;
 
 import com.google.android.apps.authenticator.Base32String;
 import com.google.android.apps.authenticator.Base32String.DecodingException;
+
+import org.fedorahosted.freeotp.keystore.KeyStoreProxy;
+import org.fedorahosted.freeotp.keystore.SecretStore;
+
+import java.nio.ByteBuffer;
+import java.security.NoSuchAlgorithmException;
+import java.util.Locale;
+
+import javax.crypto.Mac;
 
 public class Token {
     public static class TokenUriInvalidException extends Exception {
         private static final long serialVersionUID = -1108624734612362345L;
     }
 
-    public static enum TokenType {
+    public enum TokenType {
         HOTP, TOTP
     }
 
@@ -51,7 +52,7 @@ public class Token {
     private String imageAlt;
     private TokenType type;
     private String algo;
-    private byte[] secret;
+    private String secretLabel;
     private int digits;
     private long counter;
     private int period;
@@ -115,10 +116,9 @@ public class Token {
 
         try {
             String s = uri.getQueryParameter("secret");
-            secret = Base32String.decode(s);
-        } catch (DecodingException e) {
-            throw new TokenUriInvalidException();
-        } catch (NullPointerException e) {
+            SecretStore secretStore = new SecretStore(new KeyStoreProxy());
+            secretLabel = secretStore.addKey(Base32String.decode(s), algo);
+        } catch (DecodingException | NullPointerException e) {
             throw new TokenUriInvalidException();
         }
 
@@ -160,36 +160,29 @@ public class Token {
         for (int i = digits; i > 0; i--)
             div *= 10;
 
-        // Create the HMAC
-        try {
-            Mac mac = Mac.getInstance("Hmac" + algo);
-            mac.init(new SecretKeySpec(secret, "Hmac" + algo));
-
-            // Do the hashing
-            byte[] digest = mac.doFinal(bb.array());
-
-            // Truncate
-            int binary;
-            int off = digest[digest.length - 1] & 0xf;
-            binary = (digest[off] & 0x7f) << 0x18;
-            binary |= (digest[off + 1] & 0xff) << 0x10;
-            binary |= (digest[off + 2] & 0xff) << 0x08;
-            binary |= (digest[off + 3] & 0xff);
-            binary = binary % div;
-
-            // Zero pad
-            String hotp = Integer.toString(binary);
-            while (hotp.length() != digits)
-                hotp = "0" + hotp;
-
-            return hotp;
-        } catch (InvalidKeyException e) {
-            e.printStackTrace();
-        } catch (NoSuchAlgorithmException e) {
-            e.printStackTrace();
+        String hotp = "";
+        SecretStore secretStore = new SecretStore(new KeyStoreProxy());
+        byte[] digest = secretStore.labelToHmac(secretLabel, bb.array());
+        if (null == digest) {
+            return hotp;  // TODO - think about how to better handle this??
         }
 
-        return "";
+        // Truncate
+        int binary;
+        int off = digest[digest.length - 1] & 0xf;
+        binary = (digest[off] & 0x7f) << 0x18;
+        binary |= (digest[off + 1] & 0xff) << 0x10;
+        binary |= (digest[off + 2] & 0xff) << 0x08;
+        binary |= (digest[off + 3] & 0xff);
+        binary = binary % div;
+
+        // Zero pad
+        hotp = Integer.toString(binary);
+        while (hotp.length() != digits) {
+            hotp = "0" + hotp;
+        }
+
+        return hotp;
     }
 
     public Token(String uri, boolean internal) throws TokenUriInvalidException {
@@ -271,7 +264,7 @@ public class Token {
         String issuerLabel = !issuerExt.equals("") ? issuerExt + ":" + label : label;
 
         Uri.Builder builder = new Uri.Builder().scheme("otpauth").path(issuerLabel)
-                .appendQueryParameter("secret", Base32String.encode(secret))
+                .appendQueryParameter("secretLabel", secretLabel)
                 .appendQueryParameter("issuer", issuerInt == null ? issuerExt : issuerInt)
                 .appendQueryParameter("algorithm", algo)
                 .appendQueryParameter("digits", Integer.toString(digits))

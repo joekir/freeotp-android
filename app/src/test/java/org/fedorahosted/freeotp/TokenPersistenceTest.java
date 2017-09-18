@@ -111,9 +111,6 @@ public class TokenPersistenceTest {
         token.addProperty("period", 30);
 
         // language=JSON
-        assertEquals(token, new JsonParser().parse(mockStore.get("FreeOTP:joe@google.com")));
-
-        // language=JSON
         JsonArray order = new JsonArray();
         order.add("FreeOTP:joe@google.com");
         assertEquals(order, new JsonParser().parse(mockStore.get("tokenOrder")));
